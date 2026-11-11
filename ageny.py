@@ -129,6 +129,31 @@ def load_voices():
 
 
 # ---------------------------------------------------------------- Claude
+def extract_text(data):
+    """Pull the spoken text out of a reply, whatever kinds of blocks it holds."""
+    if isinstance(data, dict) and data.get("error"):
+        raise ValueError("the gateway returned an error: " + str(data["error"])[:200])
+    blocks = data.get("content") if isinstance(data, dict) else None
+    if isinstance(blocks, str):
+        text = blocks
+    elif isinstance(blocks, list):
+        parts = []
+        for b in blocks:
+            if isinstance(b, dict) and b.get("type", "text") == "text" and b.get("text"):
+                parts.append(b["text"])
+        text = "\n".join(parts)
+    else:
+        try:  # some gateways answer in an OpenAI-style format
+            text = data["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError, TypeError):
+            text = ""
+    if not text.strip():
+        kinds = [b.get("type") for b in blocks if isinstance(b, dict)] if isinstance(blocks, list) else None
+        reason = data.get("stop_reason") if isinstance(data, dict) else None
+        raise ValueError("no text came back (block types: %s, stop reason: %s)" % (kinds, reason))
+    return text.strip()
+
+
 def call_gateway(messages, system, max_tokens, auth_style):
     body = json.dumps({
         "model": MODEL,
@@ -149,10 +174,10 @@ def call_gateway(messages, system, max_tokens, auth_style):
     req = urllib.request.Request(BASE_URL, data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=60) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-    return data["content"][0]["text"]
+    return extract_text(data)
 
 
-def ask_claude(messages, system=CHAT_PROMPT, max_tokens=500):
+def ask_claude(messages, system=CHAT_PROMPT, max_tokens=1500):
     for style in ("x-api-key", "bearer"):
         try:
             return call_gateway(messages, system, max_tokens, style)
